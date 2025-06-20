@@ -8,12 +8,14 @@ from tqdm import tqdm
 
 from chestxray14 import ChestXray14Dataset
 from chexpert import CheXpertDataset
-from descriptors_my import disease_descriptors_chexpert, disease_descriptors_chestxray14
-from model import InferenceModel
+from descriptors_3 import disease_descriptors_chexpert, disease_descriptors_chestxray14
+from model_my import InferenceModel
 from utils import calculate_auroc
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
 
 def inference_chexpert():
     split = 'test'
@@ -107,12 +109,10 @@ def inference_chestxray14():
 if __name__ == '__main__':
     # add argument parser
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', type=str, default='chexpert', help='chexpert or chestxray14')
+    parser.add_argument('--dataset', type=str, default='chestxray14', help='chexpert or chestxray14')
     args = parser.parse_args()
 
-    '''if args.dataset == 'chexpert':
+    if args.dataset == 'chexpert':
         inference_chexpert()
     elif args.dataset == 'chestxray14':
-        inference_chestxray14()'''
-    
-    inference_chexpert()
+        inference_chestxray14()

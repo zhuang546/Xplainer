@@ -1,4 +1,6 @@
 import torch
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "4,5,6,7"
 
 print("PyTorch 版本:", torch.__version__)
 print("CUDA 是否可用:", torch.cuda.is_available())

@@ -3,7 +3,7 @@ from PIL import Image
 import csv
 from tqdm import tqdm
 
-root_dir = Path('ChestX-ray14') # change to path of the dataset
+root_dir = Path('/disk026/share/zhuang/Xplainer/data/chestxray14') # change to path of the dataset
 
 
 def convert_images():
