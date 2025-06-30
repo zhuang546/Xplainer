@@ -17,12 +17,12 @@ class InferenceModel:
     def __init__(self):
         # 文本推理（CXR-BERT）
         self.text_inference = get_bert_inference(
-            bert_encoder_type=BertEncoderType.BIOVIL_T_BERT # 老模型 CXR_BERT
+            bert_encoder_type=BertEncoderType.CXR_BERT # 老模型 CXR_BERT, 新模型 BIOVIL_T_BERT
         )
 
         # 图像推理（BioViL-ResNet）
         self.image_inference = get_image_inference(
-            image_model_type=ImageModelType.BIOVIL_T # 老模型 BIOVIL
+            image_model_type=ImageModelType.BIOVIL # 老模型 BIOVIL，新模型 BIOVIL_T
         )
 
         # 跨模态推理器
@@ -84,15 +84,16 @@ class InferenceModel:
 
         # Default get_similarity_score_from_raw_data would load the image every time. Instead we only load once.
         for desc in descriptors:
-            prompt = f'There are {desc}'
+            prompt = f'There is {desc}'
             score = self.get_similarity_score_from_raw_data(image_embedding, prompt)
             if do_negative_prompting:
-                neg_prompt = f'There are no {desc}'
+                neg_prompt = f'No {desc}'
+                #neg_prompt = f'There is no evidence of {desc}'
                 neg_score = self.get_similarity_score_from_raw_data(image_embedding, neg_prompt)
 
-            pos_prob = cos_sim_to_prob(score)
+            pos_prob = cos_sim_to_prob(score) # 在不进行负面提示的情况下，直接使用余弦相似度转换为概率
 
-            if do_negative_prompting:
+            if do_negative_prompting: # 如果进行负面提示，则计算一个统合概率来覆盖掉正向概率
                 pos_prob, neg_prob = torch.softmax((torch.tensor([score, neg_score]) / 0.5), dim=0)
                 negative_probs[desc] = neg_prob
 
@@ -117,6 +118,27 @@ class InferenceModel:
     def get_diseases_probs(self, disease_descriptors, pos_probs, negative_probs, prior_probs=None, do_negative_prompting=True):
         disease_probs = {}
         disease_neg_probs = {}
+
+        # Define temperature for LogSumExp aggregation for each disease.
+        # A small temp (e.g., 0.05) makes it behave like 'max'.
+        # 'mean' will be used for diseases not in this dict.
+        temp_strategies = {
+            'No Finding': None,
+            'Enlarged Cardiomediastinum': None,
+            'Cardiomegaly': 0.05,
+            'Lung Opacity': 0.05,
+            'Lung Lesion': 0.05,
+            'Edema': None,
+            'Consolidation': None,
+            'Pneumonia': None,
+            'Atelectasis': None,
+            'Pneumothorax': 0.05,
+            'Pleural Effusion': None,
+            'Pleural Other': None,
+            'Fracture': None,
+            'Support Devices': 0.01,
+        }
+
         for disease, descriptors in disease_descriptors.items():
             desc_log_probs = []
             desc_neg_log_probs = []
@@ -125,14 +147,31 @@ class InferenceModel:
                 desc_log_probs.append(prob_to_log_prob(pos_probs[desc]))
                 if do_negative_prompting:
                     desc_neg_log_probs.append(prob_to_log_prob(negative_probs[desc]))
-            disease_log_prob = sum(sorted(desc_log_probs, reverse=True)) / len(desc_log_probs)
-            if do_negative_prompting:
-                disease_neg_log_prob = sum(desc_neg_log_probs) / len(desc_neg_log_probs)
+
+            # Apply strategy based on the disease
+            #temp = temp_strategies.get(disease)
+            temp = None
+
+            if temp is not None:
+                # Use LogSumExp for specified diseases
+                log_probs_tensor = torch.tensor(desc_log_probs)
+                disease_log_prob = (torch.logsumexp(log_probs_tensor/temp, dim=0) - torch.log(torch.tensor(len(desc_log_probs)))) * temp
+                if do_negative_prompting:
+                    # For negative prompts, we can use a similar logic or a different one.
+                    log_neg_probs_tensor = torch.tensor(desc_neg_log_probs)
+                    disease_neg_log_prob = (torch.logsumexp(log_neg_probs_tensor/temp, dim=0) - torch.log(torch.tensor(len(desc_neg_log_probs)))) * temp
+            else: 
+                # Default to mean for all other diseases
+                disease_log_prob = sum(sorted(desc_log_probs, reverse=True)) / len(desc_log_probs)
+                if do_negative_prompting:
+                    disease_neg_log_prob = sum(desc_neg_log_probs) / len(desc_neg_log_probs)
+
             disease_probs[disease] = log_prob_to_prob(disease_log_prob)
             if do_negative_prompting:
                 disease_neg_probs[disease] = log_prob_to_prob(disease_neg_log_prob)
 
         return disease_probs, disease_neg_probs
+
 
     # Threshold Based
     def get_predictions(self, disease_descriptors, threshold, disease_probs, keys):
@@ -145,10 +184,18 @@ class InferenceModel:
             if disease_probs[disease] > threshold:
                 predicted_diseases.append(disease)
 
-        if len(predicted_diseases) == 0:  # No finding rule based
-            prob_vector[0] = 1.0 - max(prob_vector)
-        else:
-            prob_vector[0] = 1.0 - max(prob_vector)
+        # prob_vector[0] = 1.0 - max(prob_vector) # No finding rule based
+        # A smooth approximation of 1 - max(p) using LogSumExp
+        # This captures the "probability of any disease being present" in a soft way.
+        disease_probs_tensor = prob_vector[1:]
+        # Add a small epsilon to prevent log(0)
+        epsilon = 1e-6
+        logits = torch.log(disease_probs_tensor + epsilon) - torch.log(1 - disease_probs_tensor + epsilon)
+        
+        # Aggregate logits using LogSumExp, which is a smooth max function
+        # A temperature parameter could be added here for more control: torch.logsumexp(logits / temp, 0) * temp
+        prob_any_disease = torch.sigmoid(torch.logsumexp(logits, 0))
+        prob_vector[0] = 1.0 - prob_any_disease
 
         return predicted_diseases, prob_vector
 
@@ -164,9 +211,14 @@ class InferenceModel:
             if torch.argmax(pos_neg_scores) == 0:  # Positive is More likely
                 predicted_diseases.append(disease)
 
-        if len(predicted_diseases) == 0:  # No finding rule based
-            prob_vector[0] = 1.0 - max(prob_vector)
-        else:
-            prob_vector[0] = 1.0 - max(prob_vector)
+        # prob_vector[0] = torch.prod(1.0 - prob_vector[1:])
+        # A smooth approximation of 1 - max(p) using LogSumExp
+        disease_probs_tensor = prob_vector[1:]
+        epsilon = 1e-6
+        logits = torch.log(disease_probs_tensor + epsilon) - torch.log(1 - disease_probs_tensor + epsilon)
+        # A temperature parameter could be added here for more control
+        temp = 0.05  # Lower temperature makes it closer to a hard max
+        prob_any_disease = torch.sigmoid(torch.logsumexp(logits / temp, 0) * temp)
+        prob_vector[0] = 1.0 - prob_any_disease
 
         return predicted_diseases, prob_vector

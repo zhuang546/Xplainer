@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from chestxray14 import ChestXray14Dataset
 from chexpert import CheXpertDataset
-from descriptors_3 import disease_descriptors_chexpert, disease_descriptors_chestxray14
+from descriptors_7 import disease_descriptors_chexpert, disease_descriptors_chestxray14
 from model_my import InferenceModel
 from utils import calculate_auroc
 
@@ -109,7 +109,7 @@ def inference_chestxray14():
 if __name__ == '__main__':
     # add argument parser
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', type=str, default='chestxray14', help='chexpert or chestxray14')
+    parser.add_argument('--dataset', type=str, default='chexpert', help='chexpert or chestxray14')
     args = parser.parse_args()
 
     if args.dataset == 'chexpert':
