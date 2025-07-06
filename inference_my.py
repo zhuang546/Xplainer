@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from chestxray14 import ChestXray14Dataset
 from chexpert import CheXpertDataset
-from descriptors_7 import disease_descriptors_chexpert, disease_descriptors_chestxray14
+from descriptors_4 import disease_descriptors_chexpert, disease_descriptors_chestxray14
 from model_my import InferenceModel
 from utils import calculate_auroc
 
@@ -22,7 +22,6 @@ def inference_chexpert():
     dataset = CheXpertDataset(f'data/chexpert/{split}_labels.csv')  # also do test
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=lambda x: x, num_workers=0)
     inference_model = InferenceModel()
-    all_descriptors = inference_model.get_all_descriptors(disease_descriptors_chexpert)
 
     all_labels = []
     all_probs_neg = []
@@ -34,7 +33,7 @@ def inference_chexpert():
         agg_probs = []
         agg_negative_probs = []
         for image_path in image_paths:
-            probs, negative_probs = inference_model.get_descriptor_probs(image_path, descriptors=all_descriptors)
+            probs, negative_probs = inference_model.get_descriptor_probs(image_path, disease_descriptors=disease_descriptors_chexpert)
             agg_probs.append(probs)
             agg_negative_probs.append(negative_probs)
         probs = {}  # Aggregated
@@ -73,7 +72,6 @@ def inference_chestxray14():
     dataset = ChestXray14Dataset(f'data/chestxray14/Data_Entry_2017_v2020_modified.csv')
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=lambda x: x, num_workers=1)
     inference_model = InferenceModel()
-    all_descriptors = inference_model.get_all_descriptors(disease_descriptors_chestxray14)
 
     all_labels = []
     all_probs_neg = []
@@ -81,7 +79,7 @@ def inference_chestxray14():
         batch = batch[0]
         image_path, labels, keys = batch
         image_path = Path(image_path)
-        probs, negative_probs = inference_model.get_descriptor_probs(image_path, descriptors=all_descriptors)
+        probs, negative_probs = inference_model.get_descriptor_probs(image_path, disease_descriptors=disease_descriptors_chestxray14)
         disease_probs, negative_disease_probs = inference_model.get_diseases_probs(disease_descriptors_chestxray14, pos_probs=probs,
                                                                                    negative_probs=negative_probs)
         predicted_diseases, prob_vector_neg_prompt = inference_model.get_predictions_bin_prompting(disease_descriptors_chestxray14,
@@ -105,11 +103,10 @@ def inference_chestxray14():
     for idx, key in enumerate(all_keys_clean[1:]):
         print(f'{key}: {per_disease_auroc[idx]:.5f}')
 
-
 if __name__ == '__main__':
     # add argument parser
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', type=str, default='chexpert', help='chexpert or chestxray14')
+    parser.add_argument('--dataset', type=str, default='chestxray14', help='chexpert or chestxray14')
     args = parser.parse_args()
 
     if args.dataset == 'chexpert':

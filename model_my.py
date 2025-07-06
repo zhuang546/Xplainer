@@ -72,7 +72,7 @@ class InferenceModel:
         assert projected_img_emb.ndim == 2
         return projected_img_emb[0]
 
-    def get_descriptor_probs(self, image_path: Path, descriptors: List[str], do_negative_prompting=True, demo=False):
+    def get_descriptor_probs(self, image_path: Path, disease_descriptors: dict, do_negative_prompting=True, demo=False):
         probs = {}
         negative_probs = {}
         if image_path in self.image_embedding_cache:
@@ -83,30 +83,25 @@ class InferenceModel:
                 self.image_embedding_cache[image_path] = image_embedding
 
         # Default get_similarity_score_from_raw_data would load the image every time. Instead we only load once.
-        for desc in descriptors:
-            prompt = f'There is {desc}'
-            score = self.get_similarity_score_from_raw_data(image_embedding, prompt)
-            if do_negative_prompting:
-                neg_prompt = f'No {desc}'
-                #neg_prompt = f'There is no evidence of {desc}'
-                neg_score = self.get_similarity_score_from_raw_data(image_embedding, neg_prompt)
+        for disease, descs in disease_descriptors.items():
+            for desc in descs:
+                prompt_key = f"{desc} indicating {disease}"
+                prompt = f"There is {desc} indicating {disease}"
+                score = self.get_similarity_score_from_raw_data(image_embedding, prompt)
+                #print(f"Prompt:\n{prompt}\n, Score: {score:.4f}")
+                if do_negative_prompting:
+                    neg_prompt = f"There is no {desc}, no {disease}"
+                    neg_score = self.get_similarity_score_from_raw_data(image_embedding, neg_prompt)
 
-            pos_prob = cos_sim_to_prob(score) # 在不进行负面提示的情况下，直接使用余弦相似度转换为概率
+                pos_prob = cos_sim_to_prob(score) # 在不进行负面提示的情况下，直接使用余弦相似度转换为概率
 
-            if do_negative_prompting: # 如果进行负面提示，则计算一个统合概率来覆盖掉正向概率
-                pos_prob, neg_prob = torch.softmax((torch.tensor([score, neg_score]) / 0.5), dim=0)
-                negative_probs[desc] = neg_prob
+                if do_negative_prompting: # 如果进行负面提示，则计算一个统合概率来覆盖掉正向概率
+                    pos_prob, neg_prob = torch.softmax((torch.tensor([score, neg_score]) / 0.5), dim=0)
+                    negative_probs[prompt_key] = neg_prob
 
-            probs[desc] = pos_prob
+                probs[prompt_key] = pos_prob
 
         return probs, negative_probs
-
-    def get_all_descriptors(self, disease_descriptors):
-        all_descriptors = set()
-        for disease, descs in disease_descriptors.items():
-            all_descriptors.update([f"{desc} indicating {disease}" for desc in descs])
-        all_descriptors = sorted(all_descriptors)
-        return all_descriptors
 
     def get_all_descriptors_only_disease(self, disease_descriptors):
         all_descriptors = set()
@@ -125,17 +120,17 @@ class InferenceModel:
         temp_strategies = {
             'No Finding': None,
             'Enlarged Cardiomediastinum': None,
-            'Cardiomegaly': 0.05,
-            'Lung Opacity': 0.05,
-            'Lung Lesion': 0.05,
+            'Cardiomegaly': None,
+            'Lung Opacity': None,
+            'Lung Lesion': None,
             'Edema': None,
             'Consolidation': None,
             'Pneumonia': None,
             'Atelectasis': None,
-            'Pneumothorax': 0.05,
+            'Pneumothorax': None,
             'Pleural Effusion': None,
-            'Pleural Other': None,
-            'Fracture': None,
+            'Pleural Other': 0.05,
+            'Fracture': 0.05,
             'Support Devices': 0.01,
         }
 
@@ -149,8 +144,9 @@ class InferenceModel:
                     desc_neg_log_probs.append(prob_to_log_prob(negative_probs[desc]))
 
             # Apply strategy based on the disease
-            #temp = temp_strategies.get(disease)
-            temp = None
+            temp = temp_strategies.get(disease)
+            #temp = 0.05
+            temp = None  # Default to mean for all other diseases
 
             if temp is not None:
                 # Use LogSumExp for specified diseases
@@ -160,7 +156,7 @@ class InferenceModel:
                     # For negative prompts, we can use a similar logic or a different one.
                     log_neg_probs_tensor = torch.tensor(desc_neg_log_probs)
                     disease_neg_log_prob = (torch.logsumexp(log_neg_probs_tensor/temp, dim=0) - torch.log(torch.tensor(len(desc_neg_log_probs)))) * temp
-            else: 
+            else:
                 # Default to mean for all other diseases
                 disease_log_prob = sum(sorted(desc_log_probs, reverse=True)) / len(desc_log_probs)
                 if do_negative_prompting:
